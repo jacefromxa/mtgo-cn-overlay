@@ -50,8 +50,23 @@ public class WindowsOcrEngine
     /// </summary>
     private static Bitmap Preprocess(Bitmap source)
     {
-        // If image is already sufficiently large, return copy
-        int scale = (source.Height < 75) ? 2 : 1;
+        // Dynamic scaling: Windows OCR is optimized for text line height around 80-120px.
+        // If the user shrinks the preview window down to save screen space (e.g. title height is only 20-35px),
+        // we scale up to 3x or 4x with bicubic interpolation so stroke details remain crisp and legible!
+        int scale = 1;
+        if (source.Height < 35)
+        {
+            scale = 4;
+        }
+        else if (source.Height < 55)
+        {
+            scale = 3;
+        }
+        else if (source.Height < 80)
+        {
+            scale = 2;
+        }
+
         if (scale == 1) return (Bitmap)source.Clone();
 
         int targetWidth = source.Width * scale;

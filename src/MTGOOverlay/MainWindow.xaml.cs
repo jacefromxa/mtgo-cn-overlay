@@ -2,12 +2,13 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Threading;
+using Microsoft.Web.WebView2.Core;
 using MTGOOverlay.Capture;
 using MTGOOverlay.Data;
 using MTGOOverlay.Models;
@@ -21,7 +22,6 @@ public partial class MainWindow : Window
     private readonly WindowTracker _windowTracker = new();
     private readonly WindowsOcrEngine _ocrEngine = new();
     private readonly CardDatabase _cardDatabase = new();
-    private readonly DispatcherTimer _trackerTimer = new();
 
     private AppConfig _config = new();
     private TrayIconManager? _trayIcon;
@@ -30,9 +30,11 @@ public partial class MainWindow : Window
     private DateTime _mouseStationaryStart = DateTime.MinValue;
     private string? _currentCardName;
     private ulong _lastPreviewHash;
-    private bool _isScanning;
-    private bool _isWebViewReady;
-    private bool _isMoveModeActive;
+
+    private CancellationTokenSource? _trackerCts;
+    private int _scanInProgress = 0;
+    private volatile bool _isWebViewReady;
+    private volatile bool _isMoveModeActive;
 
     public MainWindow()
     {
@@ -72,21 +74,28 @@ public partial class MainWindow : Window
             },
             onExitRequested: () =>
             {
+                _trackerCts?.Cancel();
                 _trayIcon?.Dispose();
                 System.Windows.Application.Current.Shutdown();
             }
         );
 
-        // Initialize WebView2
-        string webFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web");
-        if (!Directory.Exists(webFolder))
-        {
-            webFolder = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "web"));
-        }
-
+        // 1. Initialize WebView2 with isolated LocalAppData directory to prevent cloud sync (e.g. Baidu Netdisk) file locks
         try
         {
-            await OverlayWebView.EnsureCoreWebView2Async();
+            string webFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "web");
+            if (!Directory.Exists(webFolder))
+            {
+                webFolder = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "web"));
+            }
+
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string webViewDataDir = Path.Combine(localAppData, "MTGOOverlay", "WebView2Data");
+            Directory.CreateDirectory(webViewDataDir);
+
+            var env = await CoreWebView2Environment.CreateAsync(null, webViewDataDir);
+            await OverlayWebView.EnsureCoreWebView2Async(env);
+
             OverlayWebView.CoreWebView2.WebMessageReceived += (s, args) =>
             {
                 try
@@ -112,10 +121,10 @@ public partial class MainWindow : Window
             System.Diagnostics.Debug.WriteLine($"WebView2 initialization failed: {ex.Message}");
         }
 
-        // Initialize OCR & Card Database
-        _ocrEngine.Initialize();
+        // 2. Initialize OCR & Card Database in background
         _ = Task.Run(async () =>
         {
+            _ocrEngine.Initialize();
             try
             {
                 await _cardDatabase.LoadDatabaseAsync();
@@ -126,45 +135,76 @@ public partial class MainWindow : Window
             }
         });
 
-        // Start tracking timer
-        _trackerTimer.Interval = TimeSpan.FromMilliseconds(80);
-        _trackerTimer.Tick += OnTrackerTick;
-        _trackerTimer.Start();
+        // 3. Start dedicated background tracking loop (off UI thread)
+        StartBackgroundTracker();
     }
 
-    private void ApplyOpacity(double opacity)
+    private void StartBackgroundTracker()
     {
-        if (OverlayWebView.CoreWebView2 == null) return;
-        var msg = JsonSerializer.Serialize(new
+        _trackerCts?.Cancel();
+        _trackerCts = new CancellationTokenSource();
+        var token = _trackerCts.Token;
+
+        _ = Task.Run(async () =>
         {
-            action = "settings",
-            settings = new { bgOpacity = opacity }
-        });
-        OverlayWebView.CoreWebView2.PostWebMessageAsJson(msg);
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(80, token);
+
+                    if (_isMoveModeActive || !_cardDatabase.IsLoaded || !_ocrEngine.IsAvailable || !_isWebViewReady)
+                    {
+                        continue;
+                    }
+
+                    // Ensure single flight: skip if a scan is already in progress
+                    if (Interlocked.CompareExchange(ref _scanInProgress, 1, 0) != 0)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        await DoBackgroundTrackStepAsync();
+                    }
+                    finally
+                    {
+                        Interlocked.Exchange(ref _scanInProgress, 0);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Background tracker error: {ex.Message}");
+                }
+            }
+        }, token);
     }
 
-    private async void OnTrackerTick(object? sender, EventArgs e)
+    private async Task DoBackgroundTrackStepAsync()
     {
-        if (_isMoveModeActive || _isScanning || !_cardDatabase.IsLoaded || !_ocrEngine.IsAvailable || !_isWebViewReady) return;
-
         switch (_config.Mode)
         {
             case TriggerMode.PreviewPane:
-                await HandlePreviewPaneModeAsync();
+                await HandlePreviewPaneBackgroundAsync();
                 break;
 
             case TriggerMode.HoldCtrl:
-                await HandleHoldCtrlModeAsync();
+                await HandleHoldCtrlBackgroundAsync();
                 break;
 
             case TriggerMode.Hover:
             default:
-                await HandleHoverModeAsync();
+                await HandleHoverBackgroundAsync();
                 break;
         }
     }
 
-    private async Task HandlePreviewPaneModeAsync()
+    private async Task HandlePreviewPaneBackgroundAsync()
     {
         IntPtr hWnd = _windowTracker.GetMtgoWindowHandle();
         if (hWnd == IntPtr.Zero || !Win32.GetWindowRect(hWnd, out var rect))
@@ -185,54 +225,48 @@ public partial class MainWindow : Window
         ulong currentHash = ScreenCapture.ComputeFastSampleHash(titleBmp);
         if (currentHash == _lastPreviewHash)
         {
-            // Preview content hasn't changed; avoid redundant OCR
+            // Preview content unchanged; skip OCR
             return;
         }
 
-        _isScanning = true;
-        try
-        {
-            string rawOcr = await _ocrEngine.RecognizeTextAsync(titleBmp);
-            if (string.IsNullOrWhiteSpace(rawOcr)) return;
+        string rawOcr = await _ocrEngine.RecognizeTextAsync(titleBmp);
+        if (string.IsNullOrWhiteSpace(rawOcr)) return;
 
-            var card = _cardDatabase.Lookup(rawOcr);
-            if (card != null)
+        var card = _cardDatabase.Lookup(rawOcr);
+        if (card != null)
+        {
+            _lastPreviewHash = currentHash;
+            if (card.NameEn != _currentCardName)
             {
-                _lastPreviewHash = currentHash;
-                if (card.NameEn != _currentCardName)
+                _currentCardName = card.NameEn;
+
+                Win32.GetCursorPos(out var pt);
+                var currentCursor = new System.Drawing.Point(pt.X, pt.Y);
+
+                await Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    _currentCardName = card.NameEn;
-
-                    // Get current cursor for smart position follow
-                    Win32.GetCursorPos(out var pt);
-                    var currentCursor = new System.Drawing.Point(pt.X, pt.Y);
-
                     PositionAndShow(card, currentCursor, previewRect);
-                }
+                }));
             }
-        }
-        finally
-        {
-            _isScanning = false;
         }
     }
 
-    private async Task HandleHoldCtrlModeAsync()
+    private async Task HandleHoldCtrlBackgroundAsync()
     {
         bool isCtrlDown = (Win32.GetAsyncKeyState(Win32.VK_CONTROL) & 0x8000) != 0;
         if (!isCtrlDown)
         {
             if (_currentCardName != null)
             {
-                HideOverlay();
+                await Dispatcher.BeginInvoke(new Action(HideOverlay));
             }
             return;
         }
 
-        await HandleHoverModeAsync();
+        await HandleHoverBackgroundAsync();
     }
 
-    private async Task HandleHoverModeAsync()
+    private async Task HandleHoverBackgroundAsync()
     {
         if (!Win32.GetCursorPos(out var pt)) return;
         var currentPos = new System.Drawing.Point(pt.X, pt.Y);
@@ -247,7 +281,7 @@ public partial class MainWindow : Window
 
             if (_currentCardName != null && (deltaX > 90 || deltaY > 90))
             {
-                HideOverlay();
+                await Dispatcher.BeginInvoke(new Action(HideOverlay));
             }
             return;
         }
@@ -260,35 +294,26 @@ public partial class MainWindow : Window
             return;
         }
 
-        _isScanning = true;
-        try
+        using var bmp = ScreenCapture.CaptureNearCursor(cursorPos, width: 360, height: 220, offsetY: -160);
+        if (bmp == null) return;
+
+        string rawOcr = await _ocrEngine.RecognizeTextAsync(bmp);
+        if (string.IsNullOrWhiteSpace(rawOcr)) return;
+
+        var card = _cardDatabase.Lookup(rawOcr);
+        if (card != null)
         {
-            // Capture full-card area (height 220, covering -160px upward to ensure top title bar is included)
-            using var bmp = ScreenCapture.CaptureNearCursor(cursorPos, width: 360, height: 220, offsetY: -160);
-            if (bmp == null) return;
-
-            string rawOcr = await _ocrEngine.RecognizeTextAsync(bmp);
-            if (string.IsNullOrWhiteSpace(rawOcr)) return;
-
-            var card = _cardDatabase.Lookup(rawOcr);
-            if (card != null)
+            if (card.NameEn != _currentCardName)
             {
-                if (card.NameEn != _currentCardName)
+                _currentCardName = card.NameEn;
+                await Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    _currentCardName = card.NameEn;
                     PositionAndShow(card, cursorPos, null);
-                }
+                }));
             }
-        }
-        finally
-        {
-            _isScanning = false;
         }
     }
 
-    /// <summary>
-    /// Positions and displays overlay according to user's configured PositionMode with screen edge auto-flipping.
-    /// </summary>
     private void PositionAndShow(CardEntry card, System.Drawing.Point cursorPos, Rectangle? previewRect)
     {
         double targetLeft;
@@ -324,10 +349,6 @@ public partial class MainWindow : Window
         OverlayWebView.CoreWebView2?.PostWebMessageAsJson(payload);
     }
 
-    /// <summary>
-    /// Intelligently calculates position near cursor, automatically flipping to the left or right of the mouse
-    /// depending on available screen width.
-    /// </summary>
     private void CalculateSmartCursorPosition(System.Drawing.Point cursorPos, out double left, out double top)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
@@ -339,42 +360,29 @@ public partial class MainWindow : Window
 
         double overlayWidth = Width;
         double overlayHeight = Height;
-        double offsetH = 26; // Distance from cursor
-        double offsetV = 36; // Distance above cursor
+        double offsetH = 26;
+        double offsetV = 36;
 
-        // 1. Horizontal: Check available space on the right side
-        // If enough room on the right (with at least 15px safety margin from right edge):
+        // Auto flip left / right
         if (curX + offsetH + overlayWidth <= screenWidth - 15)
         {
             left = curX + offsetH;
         }
-        // Otherwise, automatically flip to the LEFT of the cursor!
         else
         {
             left = curX - overlayWidth - offsetH;
         }
 
-        // Clamp left edge so it never goes off-screen
-        if (left < 10)
-        {
-            left = 10;
-        }
+        if (left < 10) left = 10;
 
-        // 2. Vertical: align slightly above cursor, but keep inside screen
         top = curY - offsetV;
         if (top + overlayHeight > screenHeight - 15)
         {
             top = Math.Max(10, screenHeight - overlayHeight - 15);
         }
-        if (top < 10)
-        {
-            top = 10;
-        }
+        if (top < 10) top = 10;
     }
 
-    /// <summary>
-    /// Positions overlay beside the MTGO Card Preview pane.
-    /// </summary>
     private void CalculateBesidePreviewPosition(Rectangle previewRect, out double left, out double top)
     {
         var dpi = VisualTreeHelper.GetDpi(this);
@@ -385,12 +393,10 @@ public partial class MainWindow : Window
         double prevLeft = previewRect.Left / dpi.DpiScaleX;
         double prevTop = previewRect.Top / dpi.DpiScaleY;
 
-        // Try right side first
         if (prevRight + 12 + Width <= screenWidth - 15)
         {
             left = prevRight + 12;
         }
-        // Otherwise, place to the left of the preview dock
         else if (prevLeft - 12 - Width >= 15)
         {
             left = prevLeft - 12 - Width;
@@ -417,6 +423,17 @@ public partial class MainWindow : Window
         OverlayWebView.CoreWebView2?.PostWebMessageAsJson("{\"action\":\"clear\"}");
     }
 
+    private void ApplyOpacity(double opacity)
+    {
+        if (OverlayWebView.CoreWebView2 == null) return;
+        var msg = JsonSerializer.Serialize(new
+        {
+            action = "settings",
+            settings = new { bgOpacity = opacity }
+        });
+        OverlayWebView.CoreWebView2.PostWebMessageAsJson(msg);
+    }
+
     #region Custom Position Dragging Handle
 
     public void StartMoveOverlayMode()
@@ -424,7 +441,6 @@ public partial class MainWindow : Window
         _isMoveModeActive = true;
         ShowTestCard();
 
-        // Make window interactive (not click-through)
         IntPtr hWnd = new WindowInteropHelper(this).Handle;
         Win32.SetOverlayWindowStyles(hWnd, clickThrough: false);
 
@@ -445,13 +461,11 @@ public partial class MainWindow : Window
         _isMoveModeActive = false;
         MoveBar.Visibility = Visibility.Collapsed;
 
-        // Save position
         _config.FixedLeft = Left;
         _config.FixedTop = Top;
         _config.PositionMode = OverlayPositionMode.CustomFixed;
         _config.Save();
 
-        // Restore click-through
         IntPtr hWnd = new WindowInteropHelper(this).Handle;
         Win32.SetOverlayWindowStyles(hWnd, clickThrough: true);
 
@@ -524,6 +538,7 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        _trackerCts?.Cancel();
         _trayIcon?.Dispose();
         base.OnClosed(e);
     }

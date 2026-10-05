@@ -15,8 +15,8 @@ public class WindowTracker
     /// </summary>
     public IntPtr GetMtgoWindowHandle()
     {
-        // Cache handle for 1.5 seconds to avoid heavy process enumeration
-        if (_mtgoWindowHandle != IntPtr.Zero && (DateTime.UtcNow - _lastSearchTime).TotalSeconds < 1.5)
+        // Cache handle for 2 seconds to avoid frequent process enumeration
+        if (_mtgoWindowHandle != IntPtr.Zero && (DateTime.UtcNow - _lastSearchTime).TotalSeconds < 2.0)
         {
             if (IsWindowValid(_mtgoWindowHandle))
             {
@@ -58,19 +58,9 @@ public class WindowTracker
 
     private static IntPtr FindMtgoWindow()
     {
-        // 1. Search by process name
-        var processes = Process.GetProcessesByName("MTGO");
-        foreach (var proc in processes)
-        {
-            if (proc.MainWindowHandle != IntPtr.Zero && IsWindowValid(proc.MainWindowHandle))
-            {
-                return proc.MainWindowHandle;
-            }
-        }
-
-        // 2. Fallback search by window title containing "Magic: The Gathering Online"
+        // 1. Fast check: is foreground window MTGO? (99% of active play time)
         var foreground = Win32.GetForegroundWindow();
-        if (foreground != IntPtr.Zero)
+        if (foreground != IntPtr.Zero && IsWindowValid(foreground))
         {
             var sb = new StringBuilder(256);
             Win32.GetWindowText(foreground, sb, sb.Capacity);
@@ -81,6 +71,20 @@ public class WindowTracker
                 return foreground;
             }
         }
+
+        // 2. Fallback search by process name
+        try
+        {
+            var processes = Process.GetProcessesByName("MTGO");
+            foreach (var proc in processes)
+            {
+                if (proc.MainWindowHandle != IntPtr.Zero && IsWindowValid(proc.MainWindowHandle))
+                {
+                    return proc.MainWindowHandle;
+                }
+            }
+        }
+        catch { }
 
         return IntPtr.Zero;
     }

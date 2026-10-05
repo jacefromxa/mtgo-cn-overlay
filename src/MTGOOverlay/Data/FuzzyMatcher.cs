@@ -5,11 +5,31 @@ namespace MTGOOverlay.Data;
 
 public class FuzzyMatcher
 {
-    private readonly List<string> _cardNames;
+    private readonly Dictionary<int, List<string>> _lengthBuckets = new();
+    private readonly int _minLen;
+    private readonly int _maxLen;
 
     public FuzzyMatcher(IEnumerable<string> cardNames)
     {
-        _cardNames = new List<string>(cardNames);
+        int min = int.MaxValue;
+        int max = int.MinValue;
+
+        foreach (var name in cardNames)
+        {
+            int len = name.Length;
+            if (!_lengthBuckets.TryGetValue(len, out var list))
+            {
+                list = new List<string>();
+                _lengthBuckets[len] = list;
+            }
+            list.Add(name);
+
+            if (len < min) min = len;
+            if (len > max) max = len;
+        }
+
+        _minLen = min == int.MaxValue ? 0 : min;
+        _maxLen = max == int.MinValue ? 0 : max;
     }
 
     public static string Normalize(string input)
@@ -28,37 +48,79 @@ public class FuzzyMatcher
     }
 
     /// <summary>
-    /// Finds the best matching card name for the given OCR string.
+    /// Cleans common OCR misrecognitions (numbers mistaken for letters).
     /// </summary>
-    public (string? BestMatch, int Distance) FindBestMatch(string ocrText, int maxDistance = 3)
+    public static string CleanOcrNoise(string normalized)
     {
-        string norm = Normalize(ocrText);
-        if (norm.Length < 3) return (null, int.MaxValue);
+        if (string.IsNullOrEmpty(normalized)) return string.Empty;
 
+        var sb = new System.Text.StringBuilder(normalized.Length);
+        for (int i = 0; i < normalized.Length; i++)
+        {
+            char c = normalized[i];
+            switch (c)
+            {
+                case '0':
+                    sb.Append('o');
+                    break;
+                case '1':
+                    sb.Append('i');
+                    break;
+                case '5':
+                    sb.Append('s');
+                    break;
+                case '8':
+                    sb.Append('b');
+                    break;
+                default:
+                    sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Finds the best matching card name for the given OCR string using length buckets and bounded Levenshtein.
+    /// </summary>
+    public (string? BestMatch, int Distance) FindBestMatch(string normalizedOcr, int maxDistance = 3)
+    {
+        if (normalizedOcr.Length < 3) return (null, int.MaxValue);
+
+        int qLen = normalizedOcr.Length;
         string? bestMatch = null;
         int minDistance = maxDistance + 1;
 
-        for (int i = 0; i < _cardNames.Count; i++)
-        {
-            string candidate = _cardNames[i];
-            int lenDiff = Math.Abs(candidate.Length - norm.Length);
-            if (lenDiff >= minDistance) continue;
+        int fromLen = Math.Max(_minLen, qLen - maxDistance);
+        int toLen = Math.Min(_maxLen, qLen + maxDistance);
 
-            int dist = LevenshteinDistanceBounded(norm, candidate, minDistance);
-            if (dist < minDistance)
+        for (int len = fromLen; len <= toLen; len++)
+        {
+            if (!_lengthBuckets.TryGetValue(len, out var candidates)) continue;
+
+            for (int i = 0; i < candidates.Count; i++)
             {
-                minDistance = dist;
-                bestMatch = candidate;
-                if (dist == 0) break; // Exact match found
+                string candidate = candidates[i];
+                int lenDiff = Math.Abs(candidate.Length - qLen);
+                if (lenDiff >= minDistance) continue;
+
+                int dist = LevenshteinDistanceBounded(normalizedOcr, candidate, minDistance);
+                if (dist < minDistance)
+                {
+                    minDistance = dist;
+                    bestMatch = candidate;
+                    if (dist == 0) return (bestMatch, 0); // Exact match
+                    if (dist == 1)
+                    {
+                        // Distance 1 is already very strong, continue only if wanting perfect 0
+                    }
+                }
             }
         }
 
         return minDistance <= maxDistance ? (bestMatch, minDistance) : (null, minDistance);
     }
 
-    /// <summary>
-    /// Bounded Levenshtein calculation. Returns maxLimit if distance exceeds maxLimit.
-    /// </summary>
     private static int LevenshteinDistanceBounded(string s, string t, int maxLimit)
     {
         int n = s.Length;
@@ -67,7 +129,6 @@ public class FuzzyMatcher
         if (n == 0) return m <= maxLimit ? m : maxLimit;
         if (m == 0) return n <= maxLimit ? n : maxLimit;
 
-        // Use two rows instead of full matrix to minimize allocations
         int[] v0 = new int[m + 1];
         int[] v1 = new int[m + 1];
 
@@ -87,7 +148,6 @@ public class FuzzyMatcher
 
             if (minInRow >= maxLimit) return maxLimit;
 
-            // Swap rows
             var temp = v0;
             v0 = v1;
             v1 = temp;

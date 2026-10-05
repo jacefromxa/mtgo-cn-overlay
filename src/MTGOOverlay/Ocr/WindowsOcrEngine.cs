@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Text;
@@ -22,7 +23,7 @@ public class WindowsOcrEngine
     {
         try
         {
-            // Try English first for MTGO card titles
+            // MTGO card titles are English; try en-US first
             var lang = new Language("en-US");
             if (OcrEngine.IsLanguageSupported(lang))
             {
@@ -36,11 +37,52 @@ public class WindowsOcrEngine
             _isInitialized = _ocrEngine != null;
             return _isInitialized;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"Failed to initialize OCR: {ex.Message}");
             _isInitialized = false;
             return false;
         }
+    }
+
+    /// <summary>
+    /// Preprocesses image by upscaling small crops (2x) and enhancing contrast for high OCR accuracy.
+    /// </summary>
+    private static Bitmap Preprocess(Bitmap source)
+    {
+        // If image is already sufficiently large, return copy
+        int scale = (source.Height < 75) ? 2 : 1;
+        if (scale == 1) return (Bitmap)source.Clone();
+
+        int targetWidth = source.Width * scale;
+        int targetHeight = source.Height * scale;
+
+        var enhanced = new Bitmap(targetWidth, targetHeight, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(enhanced))
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.SmoothingMode = SmoothingMode.HighQuality;
+
+            // Draw with slight contrast boost
+            using var attributes = new ImageAttributes();
+            float contrast = 1.2f;
+            float t = (1.0f - contrast) / 2.0f;
+            ColorMatrix cm = new ColorMatrix(new float[][]
+            {
+                new float[] { contrast, 0, 0, 0, 0 },
+                new float[] { 0, contrast, 0, 0, 0 },
+                new float[] { 0, 0, contrast, 0, 0 },
+                new float[] { 0, 0, 0, 1.0f, 0 },
+                new float[] { t, t, t, 0, 1.0f }
+            });
+            attributes.SetColorMatrix(cm);
+
+            g.DrawImage(source, new Rectangle(0, 0, targetWidth, targetHeight),
+                0, 0, source.Width, source.Height, GraphicsUnit.Pixel, attributes);
+        }
+
+        return enhanced;
     }
 
     /// <summary>
@@ -52,8 +94,9 @@ public class WindowsOcrEngine
 
         try
         {
+            using var processedBmp = Preprocess(bitmap);
             using var ms = new MemoryStream();
-            bitmap.Save(ms, ImageFormat.Bmp);
+            processedBmp.Save(ms, ImageFormat.Bmp);
             ms.Position = 0;
 
             using var randomAccessStream = ms.AsRandomAccessStream();
@@ -73,8 +116,9 @@ public class WindowsOcrEngine
 
             return sb.ToString().Trim();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"OCR recognition error: {ex.Message}");
             return string.Empty;
         }
     }

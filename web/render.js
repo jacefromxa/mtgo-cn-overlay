@@ -22,6 +22,21 @@
       .replace(/"/g, '&quot;');
   }
 
+  var LOWERCASE_WORDS = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'from', 'in', 'into', 'nor', 'of', 'on', 'onto', 'or', 'so', 'the', 'to', 'up', 'with', 'yet']);
+
+  function toTitleCase(str) {
+    if (!str) return '';
+    return str.split(/(\s+|[-/])/).map(function (segment, index, arr) {
+      if (!segment || /^\s+$/.test(segment) || segment === '-' || segment === '/') return segment;
+      var lower = segment.toLowerCase();
+      var isFirst = (index === 0 || arr[index - 1] === '-' || arr[index - 1] === '/');
+      if (!isFirst && LOWERCASE_WORDS.has(lower)) {
+        return lower;
+      }
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    }).join('');
+  }
+
   function renderFace(face, faceLabel) {
     var html = '<div class="card-face">';
     if (faceLabel) {
@@ -32,8 +47,9 @@
     html += '<div class="header-row">';
     html += '  <div class="name-col">';
     html += '    <div class="card-name-zh">' + escapeHtml(face.n || face.nameZh || '') + '</div>';
-    if (face.en || face.nameEn) {
-      html += '    <div class="card-name-en">' + escapeHtml(face.en || face.nameEn) + '</div>';
+    var enName = face.en || face.nameEn;
+    if (enName) {
+      html += '    <div class="card-name-en">' + escapeHtml(toTitleCase(enName)) + '</div>';
     }
     html += '  </div>';
 

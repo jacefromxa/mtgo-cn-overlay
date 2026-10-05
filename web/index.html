@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MTGO Card Overlay</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mana-font@latest/css/mana.min.css">
+  <link rel="stylesheet" href="overlay.css">
+</head>
+<body>
+  <div id="card-container"></div>
+
+  <!-- Local preview test script (auto-hidden when embedded in WebView2) -->
+  <script src="render.js"></script>
+  <script>
+    if (!window.chrome || !window.chrome.webview) {
+      // Browser preview demo card
+      window.displayCard({
+        n: "闪电击",
+        en: "Lightning Bolt",
+        c: "{R}",
+        y: "瞬间",
+        t: "闪电击对任意一个目标造成3点伤害。",
+        f: "「太棒了，这真不可思议！不过我可不想再经历第二次了。」——探险家贾米拉",
+        _src: "本地字典"
+      });
+    }
+  </script>
+</body>
+</html>

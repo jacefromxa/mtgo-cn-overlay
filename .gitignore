@@ -1,0 +1,29 @@
+# Build & Output
+bin/
+obj/
+dist/
+publish/
+*.exe
+*.dll
+*.pdb
+
+# Visual Studio / Rider / VSCode
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Web & Node
+node_modules/
+npm-debug.log*
+
+# OS & Temp
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.tmp
+*.log

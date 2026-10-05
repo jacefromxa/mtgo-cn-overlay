@@ -1,17 +1,16 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
-echo [MTGO CN Overlay] 正在启动程序...
-
-set "DOTNET_ROOT=%LocalAppData%\Microsoft\dotnet"
-set "PATH=%LocalAppData%\Microsoft\dotnet;%PATH%"
+title MTGO CN Overlay
 
 set "EXE_PATH=%~dp0src\MTGOOverlay\bin\Debug\net8.0-windows10.0.19041.0\MTGOOverlay.exe"
 
 if exist "%EXE_PATH%" (
-    echo [MTGO CN Overlay] 启动已编译程序: %EXE_PATH%
+    echo [MTGO CN Overlay] Launching MTGO CN Overlay...
     start "" "%EXE_PATH%"
-) else (
-    echo [MTGO CN Overlay] 首次运行，正在构建并启动...
-    "%LocalAppData%\Microsoft\dotnet\dotnet.exe" run --project src\MTGOOverlay\MTGOOverlay.csproj
+    exit /b 0
 )
+
+echo [MTGO CN Overlay] Compiling and starting...
+set "DOTNET_ROOT=%LocalAppData%\Microsoft\dotnet"
+set "PATH=%LocalAppData%\Microsoft\dotnet;%PATH%"
+"%LocalAppData%\Microsoft\dotnet\dotnet.exe" run --project "%~dp0src\MTGOOverlay\MTGOOverlay.csproj"

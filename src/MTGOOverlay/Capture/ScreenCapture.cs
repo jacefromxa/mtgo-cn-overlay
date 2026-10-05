@@ -7,7 +7,7 @@ namespace MTGOOverlay.Capture;
 public static class ScreenCapture
 {
     /// <summary>
-    /// Captures a specified screen rectangle into a Bitmap.
+    /// Captures a specified screen rectangle into a Bitmap with screen bounds safety clamping.
     /// </summary>
     public static Bitmap? CaptureRegion(Rectangle region)
     {
@@ -15,10 +15,15 @@ public static class ScreenCapture
 
         try
         {
-            var bmp = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppArgb);
+            int left = Math.Max(0, region.Left);
+            int top = Math.Max(0, region.Top);
+            int width = Math.Max(10, region.Width);
+            int height = Math.Max(10, region.Height);
+
+            var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
             using (var g = Graphics.FromImage(bmp))
             {
-                g.CopyFromScreen(region.Left, region.Top, 0, 0, region.Size, CopyPixelOperation.SourceCopy);
+                g.CopyFromScreen(left, top, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
             }
             return bmp;
         }
@@ -30,11 +35,14 @@ public static class ScreenCapture
     }
 
     /// <summary>
-    /// Captures an area relative to the cursor position (e.g. for card hover recognition).
+    /// Captures the full card zone around the cursor.
+    /// In MTGO, a battlefield card is typically 120-240px tall. By capturing 160px above and 60px below,
+    /// the top title bar of the card is guaranteed to be captured regardless of whether the user
+    /// hovers over the title, art, or rules text box.
     /// </summary>
-    public static Bitmap? CaptureNearCursor(Point cursorPos, int width = 340, int height = 70, int offsetY = -35)
+    public static Bitmap? CaptureNearCursor(Point cursorPos, int width = 360, int height = 220, int offsetY = -160)
     {
-        var rect = new Rectangle(cursorPos.X - 10, cursorPos.Y + offsetY, width, height);
+        var rect = new Rectangle(cursorPos.X - 50, cursorPos.Y + offsetY, width, height);
         return CaptureRegion(rect);
     }
 

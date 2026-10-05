@@ -12,8 +12,9 @@ public class TrayIconManager : IDisposable
     private readonly NotifyIcon _notifyIcon;
     private readonly AppConfig _config;
     private readonly Action<TriggerMode> _onModeChanged;
+    private readonly Action<OverlayPositionMode> _onPositionModeChanged;
+    private readonly Action _onStartMoveOverlay;
     private readonly Action _onCalibrateRequested;
-    private readonly Action _onToggleLockPosition;
     private readonly Action _onTestCardRequested;
     private readonly Action<double> _onOpacityChanged;
     private readonly Action _onExitRequested;
@@ -21,21 +22,26 @@ public class TrayIconManager : IDisposable
     private ToolStripMenuItem? _hoverItem;
     private ToolStripMenuItem? _previewItem;
     private ToolStripMenuItem? _holdCtrlItem;
-    private ToolStripMenuItem? _lockPosItem;
+
+    private ToolStripMenuItem? _posFollowCursorItem;
+    private ToolStripMenuItem? _posBesidePreviewItem;
+    private ToolStripMenuItem? _posFixedItem;
 
     public TrayIconManager(
         AppConfig config,
         Action<TriggerMode> onModeChanged,
+        Action<OverlayPositionMode> onPositionModeChanged,
+        Action onStartMoveOverlay,
         Action onCalibrateRequested,
-        Action onToggleLockPosition,
         Action onTestCardRequested,
         Action<double> onOpacityChanged,
         Action onExitRequested)
     {
         _config = config;
         _onModeChanged = onModeChanged;
+        _onPositionModeChanged = onPositionModeChanged;
+        _onStartMoveOverlay = onStartMoveOverlay;
         _onCalibrateRequested = onCalibrateRequested;
-        _onToggleLockPosition = onToggleLockPosition;
         _onTestCardRequested = onTestCardRequested;
         _onOpacityChanged = onOpacityChanged;
         _onExitRequested = onExitRequested;
@@ -66,17 +72,17 @@ public class TrayIconManager : IDisposable
         menu.Items.Add(new ToolStripSeparator());
 
         // 2. Mode selection
-        var modeMenu = new ToolStripMenuItem("🎯 取词模式 (Mode)");
+        var modeMenu = new ToolStripMenuItem("🎯 取词触发模式 (Trigger Mode)");
 
-        _hoverItem = new ToolStripMenuItem("光标悬停取词 (Hover)", null, (s, e) => SelectMode(TriggerMode.Hover))
+        _hoverItem = new ToolStripMenuItem("光标悬停取词 (Hover)", null, (s, e) => SelectTriggerMode(TriggerMode.Hover))
         {
             Checked = _config.Mode == TriggerMode.Hover
         };
-        _previewItem = new ToolStripMenuItem("Card Preview 停靠窗锚定 (Preview)", null, (s, e) => SelectMode(TriggerMode.PreviewPane))
+        _previewItem = new ToolStripMenuItem("Card Preview 停靠窗锚定 (Preview)", null, (s, e) => SelectTriggerMode(TriggerMode.PreviewPane))
         {
             Checked = _config.Mode == TriggerMode.PreviewPane
         };
-        _holdCtrlItem = new ToolStripMenuItem("按住 Ctrl 键取词 (Hold Ctrl)", null, (s, e) => SelectMode(TriggerMode.HoldCtrl))
+        _holdCtrlItem = new ToolStripMenuItem("按住 Ctrl 键取词 (Hold Ctrl)", null, (s, e) => SelectTriggerMode(TriggerMode.HoldCtrl))
         {
             Checked = _config.Mode == TriggerMode.HoldCtrl
         };
@@ -86,22 +92,33 @@ public class TrayIconManager : IDisposable
         modeMenu.DropDownItems.Add(_holdCtrlItem);
         menu.Items.Add(modeMenu);
 
-        // 3. Calibrate Preview Rect
-        menu.Items.Add(new ToolStripMenuItem("📐 框选校准 Card Preview 区域...", null, (s, e) => _onCalibrateRequested?.Invoke()));
+        // 3. Position mode selection
+        var posMenu = new ToolStripMenuItem("📍 浮窗显示位置 (Position)");
 
-        // 4. Lock overlay position
-        _lockPosItem = new ToolStripMenuItem("📌 锁定浮窗当前位置")
+        _posFollowCursorItem = new ToolStripMenuItem("智能追随鼠标（自适应左右侧）", null, (s, e) => SelectPositionMode(OverlayPositionMode.FollowCursor))
         {
-            Checked = _config.LockPosition
+            Checked = _config.PositionMode == OverlayPositionMode.FollowCursor
         };
-        _lockPosItem.Click += (s, e) =>
+        _posBesidePreviewItem = new ToolStripMenuItem("停靠在 Card Preview 预览窗旁", null, (s, e) => SelectPositionMode(OverlayPositionMode.BesidePreview))
         {
-            _config.LockPosition = !_config.LockPosition;
-            _config.Save();
-            if (_lockPosItem != null) _lockPosItem.Checked = _config.LockPosition;
-            _onToggleLockPosition?.Invoke();
+            Checked = _config.PositionMode == OverlayPositionMode.BesidePreview
         };
-        menu.Items.Add(_lockPosItem);
+        _posFixedItem = new ToolStripMenuItem("固定在自定义坐标", null, (s, e) => SelectPositionMode(OverlayPositionMode.CustomFixed))
+        {
+            Checked = _config.PositionMode == OverlayPositionMode.CustomFixed
+        };
+
+        var moveItem = new ToolStripMenuItem("✋ 拖拽调整并固定浮窗坐标...", null, (s, e) => _onStartMoveOverlay?.Invoke());
+
+        posMenu.DropDownItems.Add(_posFollowCursorItem);
+        posMenu.DropDownItems.Add(_posBesidePreviewItem);
+        posMenu.DropDownItems.Add(_posFixedItem);
+        posMenu.DropDownItems.Add(new ToolStripSeparator());
+        posMenu.DropDownItems.Add(moveItem);
+        menu.Items.Add(posMenu);
+
+        // 4. Calibrate Preview Rect
+        menu.Items.Add(new ToolStripMenuItem("📐 框选校准 Card Preview 区域...", null, (s, e) => _onCalibrateRequested?.Invoke()));
 
         // 5. Opacity submenu
         var opacityMenu = new ToolStripMenuItem("🎨 浮窗透明度 (Opacity)");
@@ -147,7 +164,7 @@ public class TrayIconManager : IDisposable
         _notifyIcon.ContextMenuStrip = menu;
     }
 
-    private void SelectMode(TriggerMode mode)
+    private void SelectTriggerMode(TriggerMode mode)
     {
         _config.Mode = mode;
         _config.Save();
@@ -157,6 +174,22 @@ public class TrayIconManager : IDisposable
         if (_holdCtrlItem != null) _holdCtrlItem.Checked = mode == TriggerMode.HoldCtrl;
 
         _onModeChanged?.Invoke(mode);
+    }
+
+    private void SelectPositionMode(OverlayPositionMode posMode)
+    {
+        _config.PositionMode = posMode;
+        _config.Save();
+
+        RefreshPositionUI(posMode);
+        _onPositionModeChanged?.Invoke(posMode);
+    }
+
+    public void RefreshPositionUI(OverlayPositionMode posMode)
+    {
+        if (_posFollowCursorItem != null) _posFollowCursorItem.Checked = posMode == OverlayPositionMode.FollowCursor;
+        if (_posBesidePreviewItem != null) _posBesidePreviewItem.Checked = posMode == OverlayPositionMode.BesidePreview;
+        if (_posFixedItem != null) _posFixedItem.Checked = posMode == OverlayPositionMode.CustomFixed;
     }
 
     public void RefreshModeUI(TriggerMode mode)

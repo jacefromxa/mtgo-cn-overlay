@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MTGOOverlay.Models;
 
@@ -17,6 +18,13 @@ public class CardDatabase
 
     public bool IsLoaded => _isLoaded;
     public int Count => _cards.Count;
+
+    private static readonly HashSet<string> IgnoredSingleWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "instant", "sorcery", "creature", "land", "artifact", "enchantment", "planeswalker", "battle",
+        "flying", "trample", "haste", "deathtouch", "lifelink", "vigilance", "reach", "ward", "defender",
+        "flash", "double strike", "first strike", "hexproof", "indestructible", "menace", "prowess"
+    };
 
     public async Task LoadDatabaseAsync(string? explicitPath = null)
     {
@@ -61,34 +69,59 @@ public class CardDatabase
     }
 
     /// <summary>
-    /// Looks up a card given raw OCR output. Handles multi-line text, noise cleaning, and fuzzy match.
+    /// Looks up a card given raw OCR output from a full card crop.
+    /// Analyzes lines top-to-bottom, strips mana costs from title lines, and filters noise words.
     /// </summary>
     public CardEntry? Lookup(string query)
     {
         if (!_isLoaded || string.IsNullOrWhiteSpace(query)) return null;
 
-        // 1. If multi-line, try each line individually first (e.g. OCR picked up Title + Mana/Type)
         var lines = query.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (lines.Length > 1)
+        if (lines.Length > 0)
         {
+            // 1. Pass 1: Check each line individually (with and without mana suffix cleaning)
             foreach (var line in lines)
             {
-                if (line.Length < 3) continue;
-                var match = LookupSingleLine(line);
+                if (line.Length < 3 || IgnoredSingleWords.Contains(line)) continue;
+
+                // Try with mana suffix stripped (e.g. "Lightning Bolt {R}" -> "Lightning Bolt")
+                string cleanedLine = CleanManaSuffix(line);
+                var match = LookupSingleLine(cleanedLine);
                 if (match != null) return match;
+
+                // If cleaned didn't match, try raw line
+                if (cleanedLine != line)
+                {
+                    match = LookupSingleLine(line);
+                    if (match != null) return match;
+                }
             }
 
-            // Also check adjacent line pairs (in case long card title wrapped)
+            // 2. Pass 2: Check adjacent line pairs (in case long title wrapped)
             for (int i = 0; i < lines.Length - 1; i++)
             {
-                string combined = lines[i] + " " + lines[i + 1];
+                string combined = CleanManaSuffix(lines[i] + " " + lines[i + 1]);
+                if (combined.Length < 4) continue;
                 var match = LookupSingleLine(combined);
                 if (match != null) return match;
             }
         }
 
-        // 2. Fall back to entire query string
-        return LookupSingleLine(query);
+        // 3. Fall back to entire query string
+        return LookupSingleLine(CleanManaSuffix(query));
+    }
+
+    private static string CleanManaSuffix(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line)) return string.Empty;
+
+        // Remove curly braces mana: {1}{U}{U}
+        string s = Regex.Replace(line, @"\{[^{}]+\}", "").Trim();
+
+        // Strip trailing typical mana cost pattern at the end of title line (e.g. ' 1G', ' 3WU', ' 5UU', ' R', ' 4BB')
+        s = Regex.Replace(s, @"\s+[0-9XYZxyz]*[WUBRGwubrg]{1,4}$", "").Trim();
+
+        return s;
     }
 
     private CardEntry? LookupSingleLine(string text)
@@ -121,7 +154,6 @@ public class CardDatabase
                 }
             }
 
-            // Also try fuzzy match on cleaned version if different
             if (cleaned != norm)
             {
                 var (bestCleanedNorm, distCleaned) = _fuzzyMatcher.FindBestMatch(cleaned, maxDistance: 2);

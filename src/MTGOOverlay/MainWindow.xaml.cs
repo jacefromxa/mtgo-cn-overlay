@@ -4,6 +4,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -31,6 +32,7 @@ public partial class MainWindow : Window
     private ulong _lastPreviewHash;
     private bool _isScanning;
     private bool _isWebViewReady;
+    private bool _isMoveModeActive;
 
     public MainWindow()
     {
@@ -55,23 +57,14 @@ public partial class MainWindow : Window
             _config,
             onModeChanged: mode =>
             {
-                _trayIcon?.ShowBalloon("模式切换", $"已切换至：{GetModeDisplayName(mode)}");
+                _trayIcon?.ShowBalloon("取词模式切换", $"已切换至：{GetModeDisplayName(mode)}");
             },
-            onCalibrateRequested: OpenCalibration,
-            onToggleLockPosition: () =>
+            onPositionModeChanged: posMode =>
             {
-                if (_config.LockPosition)
-                {
-                    _config.FixedLeft = Left;
-                    _config.FixedTop = Top;
-                    _config.Save();
-                    _trayIcon?.ShowBalloon("位置锁定", "当前浮窗位置已锁定，将不再跟随鼠标移动。");
-                }
-                else
-                {
-                    _trayIcon?.ShowBalloon("解除锁定", "浮窗将恢复动态定位。");
-                }
+                _trayIcon?.ShowBalloon("位置模式切换", $"已切换至：{GetPositionModeDisplayName(posMode)}");
             },
+            onStartMoveOverlay: StartMoveOverlayMode,
+            onCalibrateRequested: OpenCalibration,
             onTestCardRequested: ShowTestCard,
             onOpacityChanged: op =>
             {
@@ -152,7 +145,7 @@ public partial class MainWindow : Window
 
     private async void OnTrackerTick(object? sender, EventArgs e)
     {
-        if (_isScanning || !_cardDatabase.IsLoaded || !_ocrEngine.IsAvailable || !_isWebViewReady) return;
+        if (_isMoveModeActive || _isScanning || !_cardDatabase.IsLoaded || !_ocrEngine.IsAvailable || !_isWebViewReady) return;
 
         switch (_config.Mode)
         {
@@ -182,7 +175,6 @@ public partial class MainWindow : Window
         var mtgoRect = rect.ToRectangle();
         if (!_config.HasValidPreviewRect)
         {
-            // Prompt user once if preview rect hasn't been calibrated
             return;
         }
 
@@ -193,7 +185,7 @@ public partial class MainWindow : Window
         ulong currentHash = ScreenCapture.ComputeFastSampleHash(titleBmp);
         if (currentHash == _lastPreviewHash)
         {
-            // Preview content hasn't changed; avoid duplicate OCR
+            // Preview content hasn't changed; avoid redundant OCR
             return;
         }
 
@@ -210,11 +202,12 @@ public partial class MainWindow : Window
                 if (card.NameEn != _currentCardName)
                 {
                     _currentCardName = card.NameEn;
-                    // Position beside preview pane
-                    var dpi = VisualTreeHelper.GetDpi(this);
-                    double dipLeft = (previewRect.Right + 12) / dpi.DpiScaleX;
-                    double dipTop = previewRect.Top / dpi.DpiScaleY;
-                    PositionAndShow(card, dipLeft, dipTop);
+
+                    // Get current cursor for smart position follow
+                    Win32.GetCursorPos(out var pt);
+                    var currentCursor = new System.Drawing.Point(pt.X, pt.Y);
+
+                    PositionAndShow(card, currentCursor, previewRect);
                 }
             }
         }
@@ -270,7 +263,8 @@ public partial class MainWindow : Window
         _isScanning = true;
         try
         {
-            using var bmp = ScreenCapture.CaptureNearCursor(cursorPos, width: 340, height: 70, offsetY: -35);
+            // Capture full-card area (height 220, covering -160px upward to ensure top title bar is included)
+            using var bmp = ScreenCapture.CaptureNearCursor(cursorPos, width: 360, height: 220, offsetY: -160);
             if (bmp == null) return;
 
             string rawOcr = await _ocrEngine.RecognizeTextAsync(bmp);
@@ -282,12 +276,7 @@ public partial class MainWindow : Window
                 if (card.NameEn != _currentCardName)
                 {
                     _currentCardName = card.NameEn;
-
-                    var dpi = VisualTreeHelper.GetDpi(this);
-                    double dipX = cursorPos.X / dpi.DpiScaleX;
-                    double dipY = cursorPos.Y / dpi.DpiScaleY;
-
-                    PositionAndShow(card, dipX + 24, dipY - 40);
+                    PositionAndShow(card, cursorPos, null);
                 }
             }
         }
@@ -297,34 +286,33 @@ public partial class MainWindow : Window
         }
     }
 
-    private void PositionAndShow(CardEntry card, double preferredLeft, double preferredTop)
+    /// <summary>
+    /// Positions and displays overlay according to user's configured PositionMode with screen edge auto-flipping.
+    /// </summary>
+    private void PositionAndShow(CardEntry card, System.Drawing.Point cursorPos, Rectangle? previewRect)
     {
-        double screenWidth = SystemParameters.PrimaryScreenWidth;
-        double screenHeight = SystemParameters.PrimaryScreenHeight;
+        double targetLeft;
+        double targetTop;
 
-        double left = preferredLeft;
-        double top = preferredTop;
+        switch (_config.PositionMode)
+        {
+            case OverlayPositionMode.CustomFixed:
+                targetLeft = _config.FixedLeft;
+                targetTop = _config.FixedTop;
+                break;
 
-        if (_config.LockPosition)
-        {
-            left = _config.FixedLeft;
-            top = _config.FixedTop;
-        }
-        else
-        {
-            if (left + Width > screenWidth - 10)
-            {
-                left = Math.Max(10, preferredLeft - Width - 48);
-            }
-            if (top + Height > screenHeight - 10)
-            {
-                top = Math.Max(10, screenHeight - Height - 10);
-            }
-            if (top < 10) top = 10;
+            case OverlayPositionMode.BesidePreview when previewRect.HasValue:
+                CalculateBesidePreviewPosition(previewRect.Value, out targetLeft, out targetTop);
+                break;
+
+            case OverlayPositionMode.FollowCursor:
+            default:
+                CalculateSmartCursorPosition(cursorPos, out targetLeft, out targetTop);
+                break;
         }
 
-        Left = left;
-        Top = top;
+        Left = targetLeft;
+        Top = targetTop;
         Visibility = Visibility.Visible;
 
         var payload = JsonSerializer.Serialize(new
@@ -336,13 +324,142 @@ public partial class MainWindow : Window
         OverlayWebView.CoreWebView2?.PostWebMessageAsJson(payload);
     }
 
+    /// <summary>
+    /// Intelligently calculates position near cursor, automatically flipping to the left or right of the mouse
+    /// depending on available screen width.
+    /// </summary>
+    private void CalculateSmartCursorPosition(System.Drawing.Point cursorPos, out double left, out double top)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double curX = cursorPos.X / dpi.DpiScaleX;
+        double curY = cursorPos.Y / dpi.DpiScaleY;
+
+        double screenWidth = SystemParameters.PrimaryScreenWidth;
+        double screenHeight = SystemParameters.PrimaryScreenHeight;
+
+        double overlayWidth = Width;
+        double overlayHeight = Height;
+        double offsetH = 26; // Distance from cursor
+        double offsetV = 36; // Distance above cursor
+
+        // 1. Horizontal: Check available space on the right side
+        // If enough room on the right (with at least 15px safety margin from right edge):
+        if (curX + offsetH + overlayWidth <= screenWidth - 15)
+        {
+            left = curX + offsetH;
+        }
+        // Otherwise, automatically flip to the LEFT of the cursor!
+        else
+        {
+            left = curX - overlayWidth - offsetH;
+        }
+
+        // Clamp left edge so it never goes off-screen
+        if (left < 10)
+        {
+            left = 10;
+        }
+
+        // 2. Vertical: align slightly above cursor, but keep inside screen
+        top = curY - offsetV;
+        if (top + overlayHeight > screenHeight - 15)
+        {
+            top = Math.Max(10, screenHeight - overlayHeight - 15);
+        }
+        if (top < 10)
+        {
+            top = 10;
+        }
+    }
+
+    /// <summary>
+    /// Positions overlay beside the MTGO Card Preview pane.
+    /// </summary>
+    private void CalculateBesidePreviewPosition(Rectangle previewRect, out double left, out double top)
+    {
+        var dpi = VisualTreeHelper.GetDpi(this);
+        double screenWidth = SystemParameters.PrimaryScreenWidth;
+        double screenHeight = SystemParameters.PrimaryScreenHeight;
+
+        double prevRight = previewRect.Right / dpi.DpiScaleX;
+        double prevLeft = previewRect.Left / dpi.DpiScaleX;
+        double prevTop = previewRect.Top / dpi.DpiScaleY;
+
+        // Try right side first
+        if (prevRight + 12 + Width <= screenWidth - 15)
+        {
+            left = prevRight + 12;
+        }
+        // Otherwise, place to the left of the preview dock
+        else if (prevLeft - 12 - Width >= 15)
+        {
+            left = prevLeft - 12 - Width;
+        }
+        else
+        {
+            left = Math.Max(10, screenWidth - Width - 15);
+        }
+
+        top = Math.Max(10, prevTop);
+        if (top + Height > screenHeight - 15)
+        {
+            top = Math.Max(10, screenHeight - Height - 15);
+        }
+    }
+
     private void HideOverlay()
     {
+        if (_isMoveModeActive) return;
+
         _currentCardName = null;
         _lastPreviewHash = 0;
         Visibility = Visibility.Hidden;
         OverlayWebView.CoreWebView2?.PostWebMessageAsJson("{\"action\":\"clear\"}");
     }
+
+    #region Custom Position Dragging Handle
+
+    public void StartMoveOverlayMode()
+    {
+        _isMoveModeActive = true;
+        ShowTestCard();
+
+        // Make window interactive (not click-through)
+        IntPtr hWnd = new WindowInteropHelper(this).Handle;
+        Win32.SetOverlayWindowStyles(hWnd, clickThrough: false);
+
+        MoveBar.Visibility = Visibility.Visible;
+        _trayIcon?.ShowBalloon("调整位置模式", "请按住顶部的金色横条拖拽浮窗至理想位置，随后点击「保存并锁定」。");
+    }
+
+    private void MoveBar_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.LeftButton == MouseButtonState.Pressed)
+        {
+            DragMove();
+        }
+    }
+
+    private void LockCurrentPosition_Click(object sender, RoutedEventArgs e)
+    {
+        _isMoveModeActive = false;
+        MoveBar.Visibility = Visibility.Collapsed;
+
+        // Save position
+        _config.FixedLeft = Left;
+        _config.FixedTop = Top;
+        _config.PositionMode = OverlayPositionMode.CustomFixed;
+        _config.Save();
+
+        // Restore click-through
+        IntPtr hWnd = new WindowInteropHelper(this).Handle;
+        Win32.SetOverlayWindowStyles(hWnd, clickThrough: true);
+
+        _trayIcon?.RefreshPositionUI(OverlayPositionMode.CustomFixed);
+        _trayIcon?.ShowBalloon("位置已保存并锁定", $"浮窗位置已锁定至坐标 ({Math.Round(Left)}, {Math.Round(Top)})。随时可通过托盘菜单恢复鼠标跟随。");
+    }
+
+    #endregion
 
     private void OpenCalibration()
     {
@@ -367,10 +484,28 @@ public partial class MainWindow : Window
             Source = "本地字典 (测试)"
         };
 
-        var dpi = VisualTreeHelper.GetDpi(this);
-        double left = (SystemParameters.PrimaryScreenWidth - Width) / 2;
-        double top = (SystemParameters.PrimaryScreenHeight - Height) / 2;
-        PositionAndShow(sampleCard, left, top);
+        if (_config.PositionMode == OverlayPositionMode.CustomFixed)
+        {
+            Left = _config.FixedLeft;
+            Top = _config.FixedTop;
+        }
+        else
+        {
+            Win32.GetCursorPos(out var pt);
+            CalculateSmartCursorPosition(new System.Drawing.Point(pt.X, pt.Y), out double l, out double t);
+            Left = l;
+            Top = t;
+        }
+
+        Visibility = Visibility.Visible;
+
+        var payload = JsonSerializer.Serialize(new
+        {
+            action = "showCard",
+            card = sampleCard
+        });
+
+        OverlayWebView.CoreWebView2?.PostWebMessageAsJson(payload);
     }
 
     private static string GetModeDisplayName(TriggerMode mode) => mode switch
@@ -378,6 +513,13 @@ public partial class MainWindow : Window
         TriggerMode.PreviewPane => "Card Preview 停靠窗锚定",
         TriggerMode.HoldCtrl => "按住 Ctrl 键取词",
         _ => "光标悬停取词"
+    };
+
+    private static string GetPositionModeDisplayName(OverlayPositionMode posMode) => posMode switch
+    {
+        OverlayPositionMode.BesidePreview => "停靠在 Card Preview 预览窗旁",
+        OverlayPositionMode.CustomFixed => "固定在自定义坐标",
+        _ => "智能追随鼠标 (自适应左右侧)"
     };
 
     protected override void OnClosed(EventArgs e)

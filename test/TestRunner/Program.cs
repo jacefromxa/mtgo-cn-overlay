@@ -65,7 +65,22 @@ var multiLine = "Murktide Regent\nCreature — Dragon";
 var murk = db.Lookup(multiLine);
 Assert(murk != null && murk.NameZh == "黯潮龙侯", "Multi-line OCR: 'Murktide Regent\\nCreature' -> '黯潮龙侯'");
 
-// 6. Test AppConfig Load & Save
+// 6. Test Title Line with Mana Cost Suffixes (very common in MTGO card title bars)
+var boltWithMana = db.Lookup("Lightning Bolt {R}");
+Assert(boltWithMana != null && boltWithMana.NameZh == "闪电击", "Title with Mana {R}: 'Lightning Bolt {R}' -> '闪电击'");
+
+var tarmoWithMana = db.Lookup("Tarmogoyf 1G");
+Assert(tarmoWithMana != null && tarmoWithMana.NameZh == "塔莫耶夫", "Title with Mana 1G: 'Tarmogoyf 1G' -> '塔莫耶夫'");
+
+var titanWithMana = db.Lookup("Grave Titan 4BB");
+Assert(titanWithMana != null && titanWithMana.NameZh == "墓地泰坦", "Title with Mana 4BB: 'Grave Titan 4BB' -> '墓地泰坦'");
+
+// 7. Test Full Card Crop (Top Title + Type + Rules)
+var fullCardCrop = "Counterspell UU\nInstant\nCounter target spell.";
+var counter = db.Lookup(fullCardCrop);
+Assert(counter != null && counter.NameZh == "反击咒语", "Full Card Crop: 'Counterspell UU\\nInstant\\nRules' -> '反击咒语'");
+
+// 8. Test AppConfig Load & Save
 var config = new AppConfig();
 config.Mode = TriggerMode.PreviewPane;
 config.LockPosition = true;
@@ -76,7 +91,7 @@ config.Save();
 var loaded = AppConfig.Load();
 Assert(loaded.Mode == TriggerMode.PreviewPane && loaded.LockPosition && loaded.FixedLeft == 200, "AppConfig Load & Save Persistence");
 
-// 7. Test Fast Sample Hash
+// 9. Test Fast Sample Hash
 using var bmp1 = new Bitmap(100, 100);
 using var bmp2 = new Bitmap(100, 100);
 using (var g = Graphics.FromImage(bmp1)) g.Clear(Color.Blue);
@@ -90,7 +105,7 @@ using (var g = Graphics.FromImage(bmp2)) g.Clear(Color.Red);
 ulong hash3 = ScreenCapture.ComputeFastSampleHash(bmp2);
 Assert(hash1 != hash3, "Fast Sample Hash: Distinct images produce distinct hash");
 
-// 8. Test DFC / Transform card
+// 10. Test DFC / Transform card
 var delver = db.Lookup("Delver of Secrets");
 Assert(delver != null && delver.NameZh == "掘密师", "DFC Front Face: 'Delver of Secrets' -> '掘密师'");
 var insect = db.Lookup("Insectile Aberration");

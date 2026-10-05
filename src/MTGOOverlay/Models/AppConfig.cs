@@ -13,11 +13,24 @@ public enum TriggerMode
     HoldCtrl = 2
 }
 
+public enum OverlayPositionMode
+{
+    FollowCursor = 0,     // 智能追随鼠标（自适应屏幕左右侧）
+    BesidePreview = 1,    // 停靠在 Card Preview 预览窗旁
+    CustomFixed = 2       // 固定在自定义屏幕坐标
+}
+
 public class AppConfig
 {
     public TriggerMode Mode { get; set; } = TriggerMode.Hover;
 
-    public bool LockPosition { get; set; } = false;
+    public OverlayPositionMode PositionMode { get; set; } = OverlayPositionMode.FollowCursor;
+
+    public bool LockPosition
+    {
+        get => PositionMode == OverlayPositionMode.CustomFixed;
+        set => PositionMode = value ? OverlayPositionMode.CustomFixed : OverlayPositionMode.FollowCursor;
+    }
 
     public double FixedLeft { get; set; } = 100;
 

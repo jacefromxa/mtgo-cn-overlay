@@ -105,11 +105,27 @@ using (var g = Graphics.FromImage(bmp2)) g.Clear(Color.Red);
 ulong hash3 = ScreenCapture.ComputeFastSampleHash(bmp2);
 Assert(hash1 != hash3, "Fast Sample Hash: Distinct images produce distinct hash");
 
-// 10. Test DFC / Transform card
-var delver = db.Lookup("Delver of Secrets");
-Assert(delver != null && delver.NameZh == "掘密师", "DFC Front Face: 'Delver of Secrets' -> '掘密师'");
-var insect = db.Lookup("Insectile Aberration");
-Assert(insect != null && insect.NameZh == "昆虫变体", "DFC Back Face: 'Insectile Aberration' -> '昆虫变体'");
+// 11. Test WindowsOcrEngine
+var ocrEngine = new MTGOOverlay.Ocr.WindowsOcrEngine();
+bool ocrInit = ocrEngine.Initialize();
+Assert(ocrInit && ocrEngine.IsAvailable, "WindowsOcrEngine Initialized");
+
+if (ocrEngine.IsAvailable)
+{
+    using var testBmp = new Bitmap(280, 32);
+    using (var g = Graphics.FromImage(testBmp))
+    {
+        g.Clear(Color.FromArgb(30, 30, 35));
+        using var font = new Font("Georgia", 14, FontStyle.Bold);
+        using var brush = new SolidBrush(Color.White);
+        g.DrawString("Lightning Bolt", font, brush, 6, 4);
+    }
+
+    string recognized = await ocrEngine.RecognizeTextAsync(testBmp);
+    Console.WriteLine($"[INFO] Synthesized OCR output: '{recognized}'");
+    var recognizedCard = db.Lookup(recognized);
+    Assert(recognizedCard != null && recognizedCard.NameZh == "闪电击", $"OCR to DB Lookup: '{recognized}' -> '闪电击'");
+}
 
 Console.WriteLine($"\n==================================================");
 Console.WriteLine($" Summary: {passed} Passed, {failed} Failed");

@@ -87,7 +87,7 @@ public partial class CalibrationWindow : Window
         double dipWidth = Math.Abs(endPoint.X - _startPoint.X);
         double dipHeight = Math.Abs(endPoint.Y - _startPoint.Y);
 
-        if (dipWidth < 40 || dipHeight < 40)
+        if (dipWidth < 40 || dipHeight < 15)
         {
             // Too small, ignore
             SelectionBox.Visibility = Visibility.Collapsed;
@@ -103,14 +103,10 @@ public partial class CalibrationWindow : Window
 
         var calibratedRect = new Rectangle(physLeft, physTop, physWidth, physHeight);
 
-        // Update MTGO window rect if needed
-        IntPtr hWnd = _windowTracker.GetMtgoWindowHandle();
-        if (hWnd != IntPtr.Zero && Win32.GetWindowRect(hWnd, out var r))
-        {
-            _mtgoWindowRect = r.ToRectangle();
-        }
-
-        _config.SetPreviewFromAbsolute(calibratedRect, _mtgoWindowRect);
+        _config.CaptureBoxX = calibratedRect.Left;
+        _config.CaptureBoxY = calibratedRect.Top;
+        _config.CaptureBoxWidth = calibratedRect.Width;
+        _config.CaptureBoxHeight = calibratedRect.Height;
         _config.Mode = TriggerMode.PreviewPane;
         _config.Save();
 

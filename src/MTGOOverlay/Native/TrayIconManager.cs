@@ -11,51 +11,63 @@ public class TrayIconManager : IDisposable
 {
     private readonly NotifyIcon _notifyIcon;
     private readonly AppConfig _config;
-    private readonly Action<TriggerMode> _onModeChanged;
+    private readonly Action<TriggerMode>? _onTriggerModeChanged;
     private readonly Action<OverlayPositionMode> _onPositionModeChanged;
     private readonly Action _onStartMoveOverlay;
     private readonly Action _onCalibrateRequested;
-    private readonly Action _onTestCardRequested;
-    private readonly Action<double> _onOpacityChanged;
-    private readonly Action _onExitRequested;
+    private readonly Action _onAdjustCaptureBoxRequested;
+    private readonly Action<bool> _onLockCaptureBoxToggle;
+    private readonly Action<bool>? _onToggleCaptureBoxBorder;
+    private readonly Action? _onOpenSettingsRequested;
+    private readonly Action<double>? _onOpacityChanged;
+    private readonly Action? _onExitRequested;
+    private readonly Action<bool>? _onCtrlModifierChanged;
 
-    private ToolStripMenuItem? _hoverItem;
-    private ToolStripMenuItem? _previewItem;
-    private ToolStripMenuItem? _holdCtrlItem;
-
+    private ToolStripMenuItem? _requireCtrlItem;
     private ToolStripMenuItem? _posFollowCursorItem;
     private ToolStripMenuItem? _posBesidePreviewItem;
     private ToolStripMenuItem? _posFixedItem;
 
+    private ToolStripMenuItem? _lockCaptureBoxItem;
+    private ToolStripMenuItem? _showBorderItem;
+
     public TrayIconManager(
         AppConfig config,
-        Action<TriggerMode> onModeChanged,
+        Action<bool> onCtrlModifierChanged,
         Action<OverlayPositionMode> onPositionModeChanged,
         Action onStartMoveOverlay,
         Action onCalibrateRequested,
-        Action onTestCardRequested,
+        Action onAdjustCaptureBoxRequested,
+        Action<bool> onLockCaptureBoxToggle,
+        Action<bool> onToggleCaptureBoxBorder,
+        Action onOpenSettingsRequested,
         Action<double> onOpacityChanged,
-        Action onExitRequested)
+        Action onExitRequested,
+        Action<TriggerMode>? onTriggerModeChanged = null)
     {
         _config = config;
-        _onModeChanged = onModeChanged;
+        _onTriggerModeChanged = onTriggerModeChanged;
+        _onCtrlModifierChanged = onCtrlModifierChanged;
         _onPositionModeChanged = onPositionModeChanged;
         _onStartMoveOverlay = onStartMoveOverlay;
         _onCalibrateRequested = onCalibrateRequested;
-        _onTestCardRequested = onTestCardRequested;
+        _onAdjustCaptureBoxRequested = onAdjustCaptureBoxRequested;
+        _onLockCaptureBoxToggle = onLockCaptureBoxToggle;
+        _onToggleCaptureBoxBorder = onToggleCaptureBoxBorder;
+        _onOpenSettingsRequested = onOpenSettingsRequested;
         _onOpacityChanged = onOpacityChanged;
         _onExitRequested = onExitRequested;
 
         _notifyIcon = new NotifyIcon
         {
-            Text = "MTGO CN Overlay (运行中)",
+            Text = "MTGO CN Overlay (运行中 - 双击打开设置)",
             Visible = true,
-            Icon = CreateAppIcon()
+            Icon = LoadUnifiedAppIcon()
         };
 
         BuildContextMenu();
 
-        _notifyIcon.DoubleClick += (s, e) => _onTestCardRequested?.Invoke();
+        _notifyIcon.DoubleClick += (s, e) => _onOpenSettingsRequested?.Invoke();
     }
 
     private void BuildContextMenu()
@@ -69,28 +81,38 @@ public class TrayIconManager : IDisposable
             Font = new Font(menu.Font, FontStyle.Bold)
         };
         menu.Items.Add(titleItem);
+
+        // Settings Window launcher item
+        var settingsItem = new ToolStripMenuItem("⚙️ 打开设置面板 (Settings)...", null, (s, e) => _onOpenSettingsRequested?.Invoke())
+        {
+            Font = new Font(menu.Font, FontStyle.Bold)
+        };
+        menu.Items.Add(settingsItem);
         menu.Items.Add(new ToolStripSeparator());
 
-        // 2. Mode selection
-        var modeMenu = new ToolStripMenuItem("🎯 取词触发模式 (Trigger Mode)");
+        // 2. Trigger / Capture Mode
+        var modeItem = new ToolStripMenuItem("🔲 Card Preview 停靠窗锚定 (当前模式)")
+        {
+            Enabled = false,
+            Checked = true
+        };
+        menu.Items.Add(modeItem);
+        menu.Items.Add(new ToolStripSeparator());
 
-        _hoverItem = new ToolStripMenuItem("光标悬停取词 (Hover)", null, (s, e) => SelectTriggerMode(TriggerMode.Hover))
+        // 3. Ctrl Modifier Toggle
+        _requireCtrlItem = new ToolStripMenuItem("⌨️ 仅按住 Ctrl 键时弹出浮窗", null, (s, e) =>
         {
-            Checked = _config.Mode == TriggerMode.Hover
-        };
-        _previewItem = new ToolStripMenuItem("Card Preview 停靠窗锚定 (Preview)", null, (s, e) => SelectTriggerMode(TriggerMode.PreviewPane))
+            bool req = !_config.RequireCtrlKey;
+            _config.RequireCtrlKey = req;
+            _config.Save();
+            if (s is ToolStripMenuItem item) item.Checked = req;
+            _onCtrlModifierChanged?.Invoke(req);
+        })
         {
-            Checked = _config.Mode == TriggerMode.PreviewPane
+            Checked = _config.RequireCtrlKey
         };
-        _holdCtrlItem = new ToolStripMenuItem("按住 Ctrl 键取词 (Hold Ctrl)", null, (s, e) => SelectTriggerMode(TriggerMode.HoldCtrl))
-        {
-            Checked = _config.Mode == TriggerMode.HoldCtrl
-        };
-
-        modeMenu.DropDownItems.Add(_hoverItem);
-        modeMenu.DropDownItems.Add(_previewItem);
-        modeMenu.DropDownItems.Add(_holdCtrlItem);
-        menu.Items.Add(modeMenu);
+        menu.Items.Add(_requireCtrlItem);
+        menu.Items.Add(new ToolStripSeparator());
 
         // 3. Position mode selection
         var posMenu = new ToolStripMenuItem("📍 浮窗显示位置 (Position)");
@@ -117,8 +139,32 @@ public class TrayIconManager : IDisposable
         posMenu.DropDownItems.Add(moveItem);
         menu.Items.Add(posMenu);
 
-        // 4. Calibrate Preview Rect
-        menu.Items.Add(new ToolStripMenuItem("📐 框选校准 Card Preview 区域...", null, (s, e) => _onCalibrateRequested?.Invoke()));
+        // 4. Capture Box Menu
+        var captureBoxMenu = new ToolStripMenuItem("🔲 卡牌识别框 (Capture Box)");
+        var adjustBoxItem = new ToolStripMenuItem("✋ 调整识别框位置与大小...", null, (s, e) => _onAdjustCaptureBoxRequested?.Invoke());
+        _lockCaptureBoxItem = new ToolStripMenuItem("🔒 锁定识别框 (开启鼠标穿透)", null, (s, e) =>
+        {
+            bool newLocked = !_config.CaptureBoxLocked;
+            _onLockCaptureBoxToggle?.Invoke(newLocked);
+        })
+        {
+            Checked = _config.CaptureBoxLocked
+        };
+        _showBorderItem = new ToolStripMenuItem("👁️ 常驻显示识别框边框", null, (s, e) =>
+        {
+            bool newBorder = !_config.ShowCaptureBoxBorder;
+            _onToggleCaptureBoxBorder?.Invoke(newBorder);
+        })
+        {
+            Checked = _config.ShowCaptureBoxBorder
+        };
+
+        captureBoxMenu.DropDownItems.Add(adjustBoxItem);
+        captureBoxMenu.DropDownItems.Add(_lockCaptureBoxItem);
+        captureBoxMenu.DropDownItems.Add(_showBorderItem);
+        captureBoxMenu.DropDownItems.Add(new ToolStripSeparator());
+        captureBoxMenu.DropDownItems.Add(new ToolStripMenuItem("📐 全屏重新框选卡名横条...", null, (s, e) => _onCalibrateRequested?.Invoke()));
+        menu.Items.Add(captureBoxMenu);
 
         // 5. Opacity submenu
         var opacityMenu = new ToolStripMenuItem("🎨 浮窗透明度 (Opacity)");
@@ -143,10 +189,7 @@ public class TrayIconManager : IDisposable
 
         menu.Items.Add(new ToolStripSeparator());
 
-        // 6. Test card preview
-        menu.Items.Add(new ToolStripMenuItem("👁️ 测试显示示例卡牌", null, (s, e) => _onTestCardRequested?.Invoke()));
-
-        // 7. Open config directory
+        // 6. Open config directory
         menu.Items.Add(new ToolStripMenuItem("📁 打开配置文件目录", null, (s, e) =>
         {
             string configDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MTGOOverlay");
@@ -158,22 +201,10 @@ public class TrayIconManager : IDisposable
 
         menu.Items.Add(new ToolStripSeparator());
 
-        // 8. Exit
+        // 7. Exit
         menu.Items.Add(new ToolStripMenuItem("❌ 退出程序 (Exit)", null, (s, e) => _onExitRequested?.Invoke()));
 
         _notifyIcon.ContextMenuStrip = menu;
-    }
-
-    private void SelectTriggerMode(TriggerMode mode)
-    {
-        _config.Mode = mode;
-        _config.Save();
-
-        if (_hoverItem != null) _hoverItem.Checked = mode == TriggerMode.Hover;
-        if (_previewItem != null) _previewItem.Checked = mode == TriggerMode.PreviewPane;
-        if (_holdCtrlItem != null) _holdCtrlItem.Checked = mode == TriggerMode.HoldCtrl;
-
-        _onModeChanged?.Invoke(mode);
     }
 
     private void SelectPositionMode(OverlayPositionMode posMode)
@@ -192,11 +223,31 @@ public class TrayIconManager : IDisposable
         if (_posFixedItem != null) _posFixedItem.Checked = posMode == OverlayPositionMode.CustomFixed;
     }
 
+    public void RefreshCtrlModifierUI(bool require)
+    {
+        if (_requireCtrlItem != null) _requireCtrlItem.Checked = require;
+    }
+
+    private void SelectTriggerMode(TriggerMode mode)
+    {
+        _config.Mode = mode;
+        _config.Save();
+        RefreshModeUI(mode);
+        _onTriggerModeChanged?.Invoke(mode);
+    }
+
     public void RefreshModeUI(TriggerMode mode)
     {
-        if (_hoverItem != null) _hoverItem.Checked = mode == TriggerMode.Hover;
-        if (_previewItem != null) _previewItem.Checked = mode == TriggerMode.PreviewPane;
-        if (_holdCtrlItem != null) _holdCtrlItem.Checked = mode == TriggerMode.HoldCtrl;
+    }
+
+    public void RefreshCaptureBoxLocked(bool locked)
+    {
+        if (_lockCaptureBoxItem != null) _lockCaptureBoxItem.Checked = locked;
+    }
+
+    public void RefreshCaptureBoxBorder(bool showBorder)
+    {
+        if (_showBorderItem != null) _showBorderItem.Checked = showBorder;
     }
 
     private static void UpdateOpacityCheckmarks(ToolStripMenuItem menu, double selected)
@@ -212,8 +263,29 @@ public class TrayIconManager : IDisposable
         _notifyIcon.ShowBalloonTip(3000, title, text, icon);
     }
 
-    private static Icon CreateAppIcon()
+    private static Icon LoadUnifiedAppIcon()
     {
+        try
+        {
+            string icoFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
+            if (File.Exists(icoFile))
+            {
+                return new Icon(icoFile);
+            }
+        }
+        catch { }
+
+        try
+        {
+            string? exe = Process.GetCurrentProcess().MainModule?.FileName;
+            if (!string.IsNullOrEmpty(exe) && File.Exists(exe))
+            {
+                var extracted = Icon.ExtractAssociatedIcon(exe);
+                if (extracted != null) return extracted;
+            }
+        }
+        catch { }
+
         using var bmp = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(bmp))
         {

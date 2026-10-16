@@ -13,6 +13,9 @@ public class CardEntry
     [JsonPropertyName("t")]
     public string? RulesText { get; set; }
 
+    [JsonPropertyName("oracleText")]
+    public string? OracleText { get; set; }
+
     [JsonPropertyName("y")]
     public string? TypeLine { get; set; }
 

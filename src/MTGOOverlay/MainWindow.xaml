@@ -3,45 +3,65 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         Title="MTGO CN Overlay"
+        Icon="app.ico"
         Height="460" Width="380"
         WindowStyle="None"
         AllowsTransparency="True"
-        Topmost="True"
+        Topmost="False"
         ShowInTaskbar="False"
         Background="Transparent"
         Loaded="Window_Loaded">
     <Grid Background="Transparent">
-        <wv2:WebView2 x:Name="OverlayWebView" DefaultBackgroundColor="Transparent" />
+        <Grid.RowDefinitions>
+            <!-- Row 0: Move Handle Bar (Above WebView2, zero airspace overlap) -->
+            <RowDefinition x:Name="MoveBarRow" Height="Auto"/>
+            <!-- Row 1: Translation Content WebView2 -->
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
 
         <!-- Move & Calibration Handle Bar -->
         <Border x:Name="MoveBar"
+                Grid.Row="0"
                 Visibility="Collapsed"
                 Height="36"
-                VerticalAlignment="Top"
                 Background="#F0181A1F"
                 BorderBrush="#FFAD42"
                 BorderThickness="1.5"
                 CornerRadius="6"
-                Margin="6,6,6,0"
+                Margin="6,4,6,4"
                 Cursor="SizeAll"
                 MouseDown="MoveBar_MouseDown">
             <DockPanel LastChildFill="True" Margin="10,0">
-                <Button DockPanel.Dock="Right"
-                        Content="保存并锁定"
-                        FontSize="11"
-                        Padding="8,3"
-                        Background="#FFAD42"
-                        Foreground="#000000"
-                        FontWeight="Bold"
-                        BorderThickness="0"
-                        Cursor="Hand"
-                        Click="LockCurrentPosition_Click"/>
-                <TextBlock Text="✋ 按住拖拽此条移动位置"
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Content="取消"
+                            FontSize="11"
+                            Padding="8,3"
+                            Margin="0,0,6,0"
+                            Background="#333946"
+                            Foreground="#CBD5E1"
+                            FontWeight="SemiBold"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            Click="CancelMovePosition_Click"/>
+                    <Button Content="保存并锁定"
+                            FontSize="11"
+                            Padding="8,3"
+                            Background="#FFAD42"
+                            Foreground="#000000"
+                            FontWeight="Bold"
+                            BorderThickness="0"
+                            Cursor="Hand"
+                            Click="LockCurrentPosition_Click"/>
+                </StackPanel>
+                <TextBlock Text="✋ 按住拖拽此条移动浮窗位置"
                            Foreground="#FFFFFF"
                            FontSize="12"
                            FontWeight="SemiBold"
                            VerticalAlignment="Center"/>
             </DockPanel>
         </Border>
+
+        <!-- Translation Card WebView2 in Row 1 -->
+        <wv2:WebView2 Grid.Row="1" x:Name="OverlayWebView" DefaultBackgroundColor="Transparent" />
     </Grid>
 </Window>

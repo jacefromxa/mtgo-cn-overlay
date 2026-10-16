@@ -58,34 +58,49 @@ public class WindowTracker
 
     private static IntPtr FindMtgoWindow()
     {
-        // 1. Fast check: is foreground window MTGO? (99% of active play time)
+        // 1. Fast check: is foreground window belonging to MTGO process?
         var foreground = Win32.GetForegroundWindow();
         if (foreground != IntPtr.Zero && IsWindowValid(foreground))
         {
-            var sb = new StringBuilder(256);
-            Win32.GetWindowText(foreground, sb, sb.Capacity);
-            string title = sb.ToString();
-            if (title.Contains("Magic: The Gathering Online", StringComparison.OrdinalIgnoreCase) ||
-                title.StartsWith("MTGO", StringComparison.OrdinalIgnoreCase))
+            try
             {
-                return foreground;
+                Win32.GetWindowThreadProcessId(foreground, out uint pid);
+                var proc = Process.GetProcessById((int)pid);
+                if (proc.ProcessName.Equals("MTGO", StringComparison.OrdinalIgnoreCase))
+                {
+                    return foreground;
+                }
             }
+            catch { }
         }
 
-        // 2. Fallback search by process name
+        // 2. Search visible top-level windows for MTGO process
+        IntPtr found = IntPtr.Zero;
         try
         {
             var processes = Process.GetProcessesByName("MTGO");
-            foreach (var proc in processes)
+            if (processes.Length > 0)
             {
-                if (proc.MainWindowHandle != IntPtr.Zero && IsWindowValid(proc.MainWindowHandle))
+                var pids = new System.Collections.Generic.HashSet<uint>();
+                foreach (var p in processes) pids.Add((uint)p.Id);
+
+                Win32.EnumWindows((hWnd, lParam) =>
                 {
-                    return proc.MainWindowHandle;
-                }
+                    if (Win32.IsWindowVisible(hWnd) && IsWindowValid(hWnd))
+                    {
+                        Win32.GetWindowThreadProcessId(hWnd, out uint pid);
+                        if (pids.Contains(pid))
+                        {
+                            found = hWnd;
+                            return false; // Found main MTGO window, stop enumeration
+                        }
+                    }
+                    return true;
+                }, IntPtr.Zero);
             }
         }
         catch { }
 
-        return IntPtr.Zero;
+        return found;
     }
 }

@@ -37,6 +37,10 @@
     }).join('');
   }
 
+  var currentSettings = {
+    showEnRules: true
+  };
+
   function renderFace(face, faceLabel) {
     var html = '<div class="card-face">';
     if (faceLabel) {
@@ -63,8 +67,8 @@
       html += '<div class="type-line">' + escapeHtml(face.y || face.type) + '</div>';
     }
 
-    // Rules
-    var rules = face.t || face.oracleText || '';
+    // Rules (Chinese)
+    var rules = face.t || face.rulesText || '';
     if (rules) {
       html += '<div class="rules-text">';
       var lines = rules.split(/\r?\n/);
@@ -74,6 +78,23 @@
           html += '<div class="rules-line">' + formatManaSymbols(escapeHtml(line)) + '</div>';
         } else {
           html += '<div class="rules-line empty-line"></div>';
+        }
+      }
+      html += '</div>';
+    }
+
+    // English Oracle Rules (if present)
+    var enRules = face.oracleText || face.enRules || '';
+    if (enRules && typeof enRules === 'string') {
+      var displayStyle = (currentSettings.showEnRules === false) ? 'none' : 'block';
+      html += '<div class="rules-text-en" style="display: ' + displayStyle + ';">';
+      var enLines = enRules.split(/\r?\n/);
+      for (var j = 0; j < enLines.length; j++) {
+        var enLine = enLines[j].trim();
+        if (enLine) {
+          html += '<div class="rules-line-en">' + formatManaSymbols(escapeHtml(enLine)) + '</div>';
+        } else {
+          html += '<div class="rules-line-en empty-line"></div>';
         }
       }
       html += '</div>';
@@ -130,14 +151,58 @@
     container.innerHTML = html;
   }
 
+  function hexToRgba(hex, opacity) {
+    if (!hex) hex = '#1a1c21';
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex[0]+hex[0] + hex[1]+hex[1] + hex[2]+hex[2];
+    var r = parseInt(hex.substring(0, 2), 16) || 26;
+    var g = parseInt(hex.substring(2, 4), 16) || 28;
+    var b = parseInt(hex.substring(4, 6), 16) || 33;
+    var op = (opacity != null) ? opacity : 0.85;
+    return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + op + ')';
+  }
+
   function updateSettings(settings) {
     if (!settings) return;
     var root = document.documentElement;
-    if (settings.bgOpacity != null) root.style.setProperty('--mtgo-bg-opacity', settings.bgOpacity);
-    if (settings.nameColor) root.style.setProperty('--mtgo-name-color', settings.nameColor);
-    if (settings.nameSize) root.style.setProperty('--mtgo-name-size', settings.nameSize + 'px');
-    if (settings.textColor) root.style.setProperty('--mtgo-text-color', settings.textColor);
-    if (settings.textSize) root.style.setProperty('--mtgo-text-size', settings.textSize + 'px');
+
+    if (settings.bgColor || settings.bgOpacity != null) {
+      root.style.setProperty('--mtgo-card-bg', hexToRgba(settings.bgColor, settings.bgOpacity));
+    }
+    if (settings.nameZhColor) root.style.setProperty('--mtgo-name-zh-color', settings.nameZhColor);
+    if (settings.nameZhSize) root.style.setProperty('--mtgo-name-zh-size', settings.nameZhSize + 'px');
+    if (settings.nameEnColor) root.style.setProperty('--mtgo-name-en-color', settings.nameEnColor);
+    if (settings.nameEnSize) root.style.setProperty('--mtgo-name-en-size', settings.nameEnSize + 'px');
+
+    if (settings.typeColor) root.style.setProperty('--mtgo-type-color', settings.typeColor);
+    if (settings.typeSize) root.style.setProperty('--mtgo-type-size', settings.typeSize + 'px');
+
+    if (settings.rulesColor) root.style.setProperty('--mtgo-rules-color', settings.rulesColor);
+    if (settings.rulesSize) root.style.setProperty('--mtgo-rules-size', settings.rulesSize + 'px');
+
+    if (settings.enRulesColor) {
+      root.style.setProperty('--mtgo-en-rules-color', settings.enRulesColor);
+      var enNodes = document.querySelectorAll('.rules-text-en');
+      for (var k = 0; k < enNodes.length; k++) {
+        enNodes[k].style.color = settings.enRulesColor;
+      }
+    }
+    if (settings.enRulesSize) {
+      root.style.setProperty('--mtgo-en-rules-size', settings.enRulesSize + 'px');
+      var enNodes = document.querySelectorAll('.rules-text-en');
+      for (var k = 0; k < enNodes.length; k++) {
+        enNodes[k].style.fontSize = settings.enRulesSize + 'px';
+      }
+    }
+    if (settings.showEnRules != null) {
+      currentSettings.showEnRules = !!settings.showEnRules;
+      root.style.setProperty('--mtgo-en-rules-display', currentSettings.showEnRules ? 'block' : 'none');
+      var enNodes = document.querySelectorAll('.rules-text-en');
+      for (var k = 0; k < enNodes.length; k++) {
+        enNodes[k].style.display = currentSettings.showEnRules ? 'block' : 'none';
+      }
+    }
+
     if (settings.ptColor) root.style.setProperty('--mtgo-pt-color', settings.ptColor);
     if (settings.ptSize) root.style.setProperty('--mtgo-pt-size', settings.ptSize + 'px');
   }

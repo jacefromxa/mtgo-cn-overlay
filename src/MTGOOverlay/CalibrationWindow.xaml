@@ -27,14 +27,18 @@
                 Canvas.Left="30"
                 Canvas.Top="30">
             <StackPanel>
-                <TextBlock Text="🎯 请用鼠标左键拖动框选 MTGO 的【卡牌预览窗格 (Card Preview)】"
+                <TextBlock Text="🎯 请用鼠标左键拖动框选 MTGO 的【卡牌英文名称横条】"
                            Foreground="#FFFFFF"
                            FontSize="15"
                            FontWeight="Bold" />
-                <TextBlock Text="• 框选完毕后松开鼠标即可保存设置并自动生效"
+                <TextBlock Text="• 仅框选卡牌顶部的英文名称文字条即可（无需框选整张大卡牌）"
                            Foreground="#A1A1AA"
                            FontSize="12"
                            Margin="0,4,0,0" />
+                <TextBlock Text="• 框选后松开鼠标即生效，后续可随时直接拖拽微调"
+                           Foreground="#FFAD42"
+                           FontSize="12"
+                           Margin="0,2,0,0" />
                 <TextBlock Text="• 按 ESC 或鼠标右键取消"
                            Foreground="#FF7B72"
                            FontSize="12"

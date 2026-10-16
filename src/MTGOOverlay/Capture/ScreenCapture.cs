@@ -15,15 +15,14 @@ public static class ScreenCapture
 
         try
         {
-            int left = Math.Max(0, region.Left);
-            int top = Math.Max(0, region.Top);
-            int width = Math.Max(10, region.Width);
-            int height = Math.Max(10, region.Height);
+            var vs = System.Windows.Forms.SystemInformation.VirtualScreen;
+            var inter = Rectangle.Intersect(region, vs);
+            if (inter.Width < 5 || inter.Height < 5) return null;
 
-            var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var bmp = new Bitmap(inter.Width, inter.Height, PixelFormat.Format32bppArgb);
             using (var g = Graphics.FromImage(bmp))
             {
-                g.CopyFromScreen(left, top, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
+                g.CopyFromScreen(inter.Left, inter.Top, 0, 0, new Size(inter.Width, inter.Height), CopyPixelOperation.SourceCopy);
             }
             return bmp;
         }
@@ -47,20 +46,12 @@ public static class ScreenCapture
     }
 
     /// <summary>
-    /// Captures the title strip of MTGO's Card Preview pane.
-    /// In MTGO's preview dock, the card title is located at ~3% to 12% from the top.
+    /// Captures the exact title box of MTGO's Card Preview pane (1:1 direct capture, zero guessing).
     /// </summary>
-    public static Bitmap? CapturePreviewTitle(Rectangle previewPaneRect)
+    public static Bitmap? CapturePreviewTitle(Rectangle titleBoxRect)
     {
-        if (previewPaneRect.Width < 50 || previewPaneRect.Height < 50) return null;
-
-        int titleTop = previewPaneRect.Top + (int)(previewPaneRect.Height * 0.03);
-        int titleHeight = Math.Max(28, (int)(previewPaneRect.Height * 0.10));
-        int titleLeft = previewPaneRect.Left + (int)(previewPaneRect.Width * 0.04);
-        int titleWidth = Math.Max(50, (int)(previewPaneRect.Width * 0.92));
-
-        var titleRect = new Rectangle(titleLeft, titleTop, titleWidth, titleHeight);
-        return CaptureRegion(titleRect);
+        if (titleBoxRect.Width <= 0 || titleBoxRect.Height <= 0) return null;
+        return CaptureRegion(titleBoxRect);
     }
 
     /// <summary>
